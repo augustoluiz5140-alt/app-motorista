@@ -8,6 +8,13 @@ function brNum(n, d = 2) {
   if (!Number.isFinite(n)) return "—";
   return n.toLocaleString("pt-BR", { maximumFractionDigits: d });
 }
+function msToHMS(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, "0")}h${String(m).padStart(2, "0")}m${String(s).padStart(2, "0")}s`;
+}
 
 // Distância entre 2 coords (metros) - Haversine
 function haversineMeters(a, b) {
@@ -25,12 +32,21 @@ function haversineMeters(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-function msToHMS(ms) {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return `${String(h).padStart(2, "0")}h${String(m).padStart(2, "0")}m${String(s).padStart(2, "0")}s`;
+const STORAGE_KEY = "app_motorista_sessoes_v1";
+
+function loadSessions() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed;
+  } catch {
+    return [];
+  }
+}
+function saveSessions(list) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
 export default function App() {
@@ -54,15 +70,21 @@ export default function App() {
   const [outros, setOutros] = useState(0);
 
   // ===== Sessão (ao vivo) =====
-  const [ganhos, setGanhos] = useState(0); // “Meus ganhos”
+  const [ganhos, setGanhos] = useState(0);
   const [rodando, setRodando] = useState(false);
   const [pausado, setPausado] = useState(false);
-
   const [elapsedMs, setElapsedMs] = useState(0);
   const [kmSessao, setKmSessao] = useState(0);
 
   const [gpsStatus, setGpsStatus] = useState("GPS parado");
   const [gpsAccuracy, setGpsAccuracy] = useState(null);
+
+  // ===== Histórico =====
+  const [sessions, setSessions] = useState(() => loadSessions());
+
+  useEffect(() => {
+    saveSessions(sessions);
+  }, [sessions]);
 
   // refs
   const startMsRef = useRef(null);
@@ -110,10 +132,7 @@ export default function App() {
 
         const p = { lat: latitude, lon: longitude, t, acc: accuracy };
 
-        // filtro: precisão ruim
-        if (Number.isFinite(accuracy) && accuracy > MAX_ACC_METERS) {
-          return;
-        }
+        if (Number.isFinite(accuracy) && accuracy > MAX_ACC_METERS) return;
 
         const last = lastPointRef.current;
         if (!last) {
@@ -130,13 +149,11 @@ export default function App() {
         const dist = haversineMeters(last, p);
         const speed = dist / dt;
 
-        // filtro: salto absurdo
         if (speed > MAX_JUMP_MPS) {
           lastPointRef.current = p;
           return;
         }
 
-        // filtro: ruído
         if (dist < MIN_STEP_METERS) {
           lastPointRef.current = p;
           return;
@@ -145,9 +162,7 @@ export default function App() {
         setKmSessao((prev) => prev + dist / 1000);
         lastPointRef.current = p;
       },
-      (err) => {
-        setGpsStatus(`Erro GPS: ${err.message}`);
-      },
+      (err) => setGpsStatus(`Erro GPS: ${err.message}`),
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
     );
   }
@@ -160,6 +175,50 @@ export default function App() {
     lastPointRef.current = null;
     setGpsStatus("GPS parado");
   }
+
+  // ===== Cálculos ao vivo =====
+  const calc = useMemo(() => {
+    const horas = elapsedMs / 3600000;
+
+    let gastoEnergia = 0;
+    let consumoLabel = "";
+
+    if (tipo === "eletrico") {
+      const kwhPorKm = kwhPor100km / 100;
+      const kwhUsados = kmSessao * kwhPorKm;
+      gastoEnergia = kwhUsados * precoKwh;
+      consumoLabel = `${brNum(kwhPor100km)} kWh/100km`;
+    } else if (tipo === "gasolina") {
+      const litros = kmPorLitroGasolina > 0 ? kmSessao / kmPorLitroGasolina : 0;
+      gastoEnergia = litros * precoGasolina;
+      consumoLabel = `${brNum(kmPorLitroGasolina)} km/L`;
+    } else {
+      const litros = kmPorLitroEtanol > 0 ? kmSessao / kmPorLitroEtanol : 0;
+      gastoEnergia = litros * precoEtanol;
+      consumoLabel = `${brNum(kmPorLitroEtanol)} km/L`;
+    }
+
+    const mediaHora = horas > 0 ? (Number(ganhos) || 0) / horas : 0;
+    const custosTotais = gastoEnergia + (Number(outros) || 0) + (Number(aluguelDia) || 0);
+    const ganhoFinal = (Number(ganhos) || 0) - custosTotais;
+
+    return { horas, mediaHora, gastoEnergia, custosTotais, ganhoFinal, consumoLabel };
+  }, [
+    tipo,
+    precoKwh,
+    kwhPor100km,
+    precoGasolina,
+    kmPorLitroGasolina,
+    precoEtanol,
+    kmPorLitroEtanol,
+    kmSessao,
+    elapsedMs,
+    ganhos,
+    outros,
+    aluguelDia,
+  ]);
+
+  const gastoLabel = tipo === "eletrico" ? "Gasto com energia" : "Gasto com combustível";
 
   // ===== Controles =====
   function iniciar() {
@@ -191,68 +250,43 @@ export default function App() {
   }
 
   function finalizar() {
+    // salva sessão (se tiver algo útil)
+    const shouldSave = (Number(ganhos) || 0) > 0 || kmSessao > 0.05 || elapsedMs > 60_000;
+    if (shouldSave) {
+      const now = new Date();
+      const session = {
+        id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        createdAt: now.toISOString(),
+        tipo,
+        km: Number(kmSessao) || 0,
+        elapsedMs: Number(elapsedMs) || 0,
+        ganhos: Number(ganhos) || 0,
+        gastoEnergia: Number(calc.gastoEnergia) || 0,
+        aluguelDia: Number(aluguelDia) || 0,
+        outros: Number(outros) || 0,
+        lucro: Number(calc.ganhoFinal) || 0,
+      };
+      setSessions((prev) => [session, ...prev].slice(0, 60)); // guarda até 60 sessões
+    }
+
     setRodando(false);
     setPausado(false);
     stopGPS();
   }
 
-  // ===== Cálculos ao vivo =====
-  const calc = useMemo(() => {
-    const horas = elapsedMs / 3600000;
+  function removeSession(id) {
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+  }
 
-    let custoPorKm = NaN;
-    let consumoLabel = "";
-    let gastoEnergia = 0;
-
-    if (tipo === "eletrico") {
-      const kwhPorKm = kwhPor100km / 100;
-      custoPorKm = precoKwh * kwhPorKm;
-      const kwhUsados = kmSessao * kwhPorKm;
-      gastoEnergia = kwhUsados * precoKwh;
-      consumoLabel = `${brNum(kwhPor100km)} kWh/100km`;
-    }
-
-    if (tipo === "gasolina") {
-      custoPorKm = kmPorLitroGasolina > 0 ? precoGasolina / kmPorLitroGasolina : NaN;
-      const litros = kmPorLitroGasolina > 0 ? kmSessao / kmPorLitroGasolina : 0;
-      gastoEnergia = litros * precoGasolina;
-      consumoLabel = `${brNum(kmPorLitroGasolina)} km/L`;
-    }
-
-    if (tipo === "etanol") {
-      custoPorKm = kmPorLitroEtanol > 0 ? precoEtanol / kmPorLitroEtanol : NaN;
-      const litros = kmPorLitroEtanol > 0 ? kmSessao / kmPorLitroEtanol : 0;
-      gastoEnergia = litros * precoEtanol;
-      consumoLabel = `${brNum(kmPorLitroEtanol)} km/L`;
-    }
-
-    const mediaHora = horas > 0 ? ganhos / horas : 0;
-    const custosTotais = gastoEnergia + (Number(outros) || 0) + (Number(aluguelDia) || 0);
-    const ganhoFinal = (Number(ganhos) || 0) - custosTotais;
-
-    return { horas, mediaHora, custoPorKm, consumoLabel, gastoEnergia, custosTotais, ganhoFinal };
-  }, [
-    tipo,
-    precoKwh,
-    kwhPor100km,
-    precoGasolina,
-    kmPorLitroGasolina,
-    precoEtanol,
-    kmPorLitroEtanol,
-    kmSessao,
-    elapsedMs,
-    ganhos,
-    outros,
-    aluguelDia,
-  ]);
-
-  const gastoLabel = tipo === "eletrico" ? "Gasto com energia" : "Gasto com combustível";
+  function clearAllSessions() {
+    setSessions([]);
+  }
 
   return (
     <div style={page}>
       <h1 style={{ marginBottom: 6 }}>Painel do Motorista (Sessão ao vivo)</h1>
       <div style={{ opacity: 0.85, marginBottom: 12 }}>
-        Android + GPS em tempo real (em HTTPS). Deixe o navegador com permissão de localização.
+        GPS em tempo real + histórico automático ao finalizar.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 14 }}>
@@ -353,10 +387,52 @@ export default function App() {
           </label>
 
           <div style={{ fontSize: 12, opacity: 0.75, marginTop: 10 }}>
-            Dica: pra GPS ficar bom, use “alta precisão” no Android e deixe o app com permissão de localização.
+            Dica: quando clicar <b>Finalizar</b>, a sessão salva no histórico automaticamente.
           </div>
         </section>
       </div>
+
+      {/* Histórico */}
+      <section style={{ ...panel, marginTop: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0 }}>Histórico de sessões</h2>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button style={btn} onClick={() => setSessions(loadSessions())}>Recarregar</button>
+            <button style={btnDanger} onClick={clearAllSessions}>Limpar tudo</button>
+          </div>
+        </div>
+
+        {sessions.length === 0 ? (
+          <div style={{ opacity: 0.75, marginTop: 10 }}>Sem sessões salvas ainda. Finalize uma sessão pra gravar.</div>
+        ) : (
+          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+            {sessions.map((s) => (
+              <div key={s.id} style={histRow}>
+                <div style={{ display: "grid", gap: 2 }}>
+                  <div style={{ fontWeight: 800 }}>
+                    {new Date(s.createdAt).toLocaleString("pt-BR")}
+                  </div>
+                  <div style={{ opacity: 0.8, fontSize: 12 }}>
+                    {s.tipo.toUpperCase()} • {brNum(s.km)} km • {msToHMS(s.elapsedMs)}
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: 2, textAlign: "right" }}>
+                  <div>Ganhos: <b>{brMoney(s.ganhos)}</b></div>
+                  <div style={{ opacity: 0.85, fontSize: 12 }}>
+                    Energia/comb: {brMoney(s.gastoEnergia)} • Aluguel: {brMoney(s.aluguelDia)} • Outros: {brMoney(s.outros)}
+                  </div>
+                  <div style={{ fontSize: 14 }}>
+                    Lucro: <b>{brMoney(s.lucro)}</b>
+                  </div>
+                </div>
+
+                <button style={btnDangerSmall} onClick={() => removeSession(s.id)}>Apagar</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -371,7 +447,7 @@ function Box({ title, value, sub }) {
   );
 }
 
-// ===== TEMA FIXO (resolve o “quadrado branco” no celular) =====
+// ===== TEMA FIXO =====
 const page = {
   padding: 16,
   fontFamily: "Arial",
@@ -442,6 +518,27 @@ const btn = {
 const btnDanger = {
   padding: "10px 12px",
   borderRadius: 12,
+  border: "1px solid #7a2b2b",
+  background: "#1a0b0b",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+
+const histRow = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr auto",
+  gap: 10,
+  alignItems: "center",
+  padding: 12,
+  border: "1px solid #262626",
+  borderRadius: 12,
+  background: "#101010",
+};
+
+const btnDangerSmall = {
+  padding: "8px 10px",
+  borderRadius: 10,
   border: "1px solid #7a2b2b",
   background: "#1a0b0b",
   color: "#fff",
