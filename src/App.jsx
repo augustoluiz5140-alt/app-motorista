@@ -30,18 +30,15 @@ function msToHMS(ms) {
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
-  const hh = String(h).padStart(2, "0");
-  const mm = String(m).padStart(2, "0");
-  const ss = String(s).padStart(2, "0");
-  return `${hh}h${mm}m${ss}s`;
+  return `${String(h).padStart(2, "0")}h${String(m).padStart(2, "0")}m${String(s).padStart(2, "0")}s`;
 }
 
 export default function App() {
-  // ===== Config (você mexe pouco) =====
+  // ===== Config =====
   const [tipo, setTipo] = useState("eletrico"); // eletrico | gasolina | etanol
 
   // Elétrico
-  const [precoKwh, setPrecoKwh] = useState(1.2);      // R$/kWh
+  const [precoKwh, setPrecoKwh] = useState(1.2); // R$/kWh
   const [kwhPor100km, setKwhPor100km] = useState(15); // kWh/100km
 
   // Gasolina
@@ -52,15 +49,13 @@ export default function App() {
   const [precoEtanol, setPrecoEtanol] = useState(4.29); // R$/L
   const [kmPorLitroEtanol, setKmPorLitroEtanol] = useState(9); // km/L
 
-  // Aluguel por dia (simples) — se quiser deixar 0, ok
+  // Custos
   const [aluguelDia, setAluguelDia] = useState(0);
-
-  // Outros custos do dia (pedágio etc.)
   const [outros, setOutros] = useState(0);
 
   // ===== Sessão (ao vivo) =====
   const [ganhos, setGanhos] = useState(0); // “Meus ganhos”
-  const [rodando, setRodando] = useState(false); // sessão ativa
+  const [rodando, setRodando] = useState(false);
   const [pausado, setPausado] = useState(false);
 
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -69,18 +64,18 @@ export default function App() {
   const [gpsStatus, setGpsStatus] = useState("GPS parado");
   const [gpsAccuracy, setGpsAccuracy] = useState(null);
 
-  // refs pra cronômetro e GPS
+  // refs
   const startMsRef = useRef(null);
   const pausedAccumRef = useRef(0);
   const tickRef = useRef(null);
 
   const watchIdRef = useRef(null);
-  const lastPointRef = useRef(null); // {lat, lon, t, acc}
+  const lastPointRef = useRef(null);
 
-  // Filtros pra evitar “km fantasma”
-  const MAX_ACC_METERS = 35;   // ignora leitura com precisão ruim (maior que isso)
-  const MAX_JUMP_MPS = 60;     // ignora salto muito rápido (>= 216 km/h)
-  const MIN_STEP_METERS = 8;   // ignora micro-variação (ruído) abaixo disso
+  // filtros anti-km fantasma
+  const MAX_ACC_METERS = 35;
+  const MAX_JUMP_MPS = 60; // 216 km/h
+  const MIN_STEP_METERS = 8;
 
   // ===== Cronômetro =====
   useEffect(() => {
@@ -89,7 +84,7 @@ export default function App() {
     tickRef.current = setInterval(() => {
       const now = Date.now();
       const base = startMsRef.current ?? now;
-      const ms = (now - base) + (pausedAccumRef.current || 0);
+      const ms = now - base + (pausedAccumRef.current || 0);
       setElapsedMs(ms);
     }, 250);
 
@@ -115,9 +110,8 @@ export default function App() {
 
         const p = { lat: latitude, lon: longitude, t, acc: accuracy };
 
-        // filtro 1: precisão
+        // filtro: precisão ruim
         if (Number.isFinite(accuracy) && accuracy > MAX_ACC_METERS) {
-          // não atualiza lastPointRef pra não “pular” depois com ponto ruim
           return;
         }
 
@@ -127,24 +121,23 @@ export default function App() {
           return;
         }
 
-        const dt = (p.t - last.t) / 1000; // segundos
+        const dt = (p.t - last.t) / 1000;
         if (dt <= 0) {
           lastPointRef.current = p;
           return;
         }
 
-        const dist = haversineMeters(last, p); // metros
-        const speed = dist / dt; // m/s
+        const dist = haversineMeters(last, p);
+        const speed = dist / dt;
 
-        // filtro 2: salto absurdo
+        // filtro: salto absurdo
         if (speed > MAX_JUMP_MPS) {
-          lastPointRef.current = p; // reseta referência, mas não soma
+          lastPointRef.current = p;
           return;
         }
 
-        // filtro 3: ruído parado
+        // filtro: ruído
         if (dist < MIN_STEP_METERS) {
-          // atualiza referência devagar pra acompanhar, mas não soma km
           lastPointRef.current = p;
           return;
         }
@@ -155,11 +148,7 @@ export default function App() {
       (err) => {
         setGpsStatus(`Erro GPS: ${err.message}`);
       },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 1000,
-        timeout: 15000,
-      }
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
     );
   }
 
@@ -172,16 +161,14 @@ export default function App() {
     setGpsStatus("GPS parado");
   }
 
-  // ===== Controles da sessão =====
+  // ===== Controles =====
   function iniciar() {
-    // reset sessão
     setRodando(true);
     setPausado(false);
     setElapsedMs(0);
     setKmSessao(0);
     pausedAccumRef.current = 0;
     startMsRef.current = Date.now();
-
     startGPS();
   }
 
@@ -189,11 +176,9 @@ export default function App() {
     if (!rodando || pausado) return;
     setPausado(true);
 
-    // acumula tempo até agora
     const now = Date.now();
     const base = startMsRef.current ?? now;
-    const atual = (now - base) + (pausedAccumRef.current || 0);
-    pausedAccumRef.current = atual;
+    pausedAccumRef.current = now - base + (pausedAccumRef.current || 0);
 
     stopGPS();
   }
@@ -201,7 +186,7 @@ export default function App() {
   function retomar() {
     if (!rodando || !pausado) return;
     setPausado(false);
-    startMsRef.current = Date.now(); // rebase
+    startMsRef.current = Date.now();
     startGPS();
   }
 
@@ -215,7 +200,6 @@ export default function App() {
   const calc = useMemo(() => {
     const horas = elapsedMs / 3600000;
 
-    // custo por km
     let custoPorKm = NaN;
     let consumoLabel = "";
     let gastoEnergia = 0;
@@ -246,15 +230,7 @@ export default function App() {
     const custosTotais = gastoEnergia + (Number(outros) || 0) + (Number(aluguelDia) || 0);
     const ganhoFinal = (Number(ganhos) || 0) - custosTotais;
 
-    return {
-      horas,
-      mediaHora,
-      custoPorKm,
-      consumoLabel,
-      gastoEnergia,
-      custosTotais,
-      ganhoFinal,
-    };
+    return { horas, mediaHora, custoPorKm, consumoLabel, gastoEnergia, custosTotais, ganhoFinal };
   }, [
     tipo,
     precoKwh,
@@ -270,20 +246,17 @@ export default function App() {
     aluguelDia,
   ]);
 
-  const energiaLabel =
-    tipo === "eletrico" ? "Energia usada" : "Combustível usado";
-  const gastoLabel =
-    tipo === "eletrico" ? "Gasto com energia" : "Gasto com combustível";
+  const gastoLabel = tipo === "eletrico" ? "Gasto com energia" : "Gasto com combustível";
 
   return (
-    <div style={{ padding: 16, fontFamily: "Arial", maxWidth: 980, margin: "0 auto" }}>
+    <div style={page}>
       <h1 style={{ marginBottom: 6 }}>Painel do Motorista (Sessão ao vivo)</h1>
-      <div style={{ opacity: 0.8, marginBottom: 12 }}>
-        Android + GPS em tempo real. (Dica: deixe o navegador com permissão de localização)
+      <div style={{ opacity: 0.85, marginBottom: 12 }}>
+        Android + GPS em tempo real (em HTTPS). Deixe o navegador com permissão de localização.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 14 }}>
-        {/* Painel (tipo a imagem) */}
+        {/* Painel */}
         <section style={panel}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
             <Box title="Meus ganhos" value={brMoney(ganhos)} sub="Digite o valor atual" />
@@ -292,7 +265,7 @@ export default function App() {
 
             <Box title="Km percorridos" value={`${brNum(kmSessao)} km`} sub={gpsAccuracy ? `Precisão: ~${Math.round(gpsAccuracy)}m` : "—"} />
             <Box title="Consumo carro" value={calc.consumoLabel} sub={tipo === "eletrico" ? "kWh/100km" : "km/L"} />
-            <Box title={gastoLabel} value={brMoney(calc.gastoEnergia)} sub={energiaLabel} />
+            <Box title={gastoLabel} value={brMoney(calc.gastoEnergia)} sub="Atualiza com o GPS" />
 
             <Box title="Aluguel (dia)" value={brMoney(Number(aluguelDia) || 0)} sub="Config" />
             <Box title="Outros (dia)" value={brMoney(Number(outros) || 0)} sub="pedágio/lavagem" />
@@ -304,19 +277,19 @@ export default function App() {
             {rodando && !pausado && <button style={btn} onClick={pausar}>Pausar</button>}
             {rodando && pausado && <button style={btnPrimary} onClick={retomar}>Retomar</button>}
             {rodando && <button style={btnDanger} onClick={finalizar}>Finalizar</button>}
-            <span style={{ alignSelf: "center", opacity: 0.8 }}>
+            <span style={{ alignSelf: "center", opacity: 0.85 }}>
               Status GPS: <b>{gpsStatus}</b>
             </span>
           </div>
         </section>
 
-        {/* Configs */}
+        {/* Config */}
         <section style={card}>
           <h2 style={{ marginTop: 0 }}>Configuração</h2>
 
           <label style={label}>
             <span>Tipo</span>
-            <select value={tipo} onChange={(e) => setTipo(e.target.value)}>
+            <select style={input} value={tipo} onChange={(e) => setTipo(e.target.value)}>
               <option value="eletrico">Elétrico (kWh)</option>
               <option value="gasolina">Gasolina</option>
               <option value="etanol">Etanol</option>
@@ -327,11 +300,11 @@ export default function App() {
             <>
               <label style={label}>
                 <span>Preço do kWh (R$/kWh)</span>
-                <input type="number" step="0.01" value={precoKwh} onChange={(e) => setPrecoKwh(+e.target.value)} />
+                <input style={input} type="number" step="0.01" value={precoKwh} onChange={(e) => setPrecoKwh(+e.target.value)} />
               </label>
               <label style={label}>
                 <span>Consumo (kWh/100km)</span>
-                <input type="number" step="0.1" value={kwhPor100km} onChange={(e) => setKwhPor100km(+e.target.value)} />
+                <input style={input} type="number" step="0.1" value={kwhPor100km} onChange={(e) => setKwhPor100km(+e.target.value)} />
               </label>
             </>
           )}
@@ -340,11 +313,11 @@ export default function App() {
             <>
               <label style={label}>
                 <span>Preço gasolina (R$/L)</span>
-                <input type="number" step="0.01" value={precoGasolina} onChange={(e) => setPrecoGasolina(+e.target.value)} />
+                <input style={input} type="number" step="0.01" value={precoGasolina} onChange={(e) => setPrecoGasolina(+e.target.value)} />
               </label>
               <label style={label}>
                 <span>Consumo (km/L)</span>
-                <input type="number" step="0.1" value={kmPorLitroGasolina} onChange={(e) => setKmPorLitroGasolina(+e.target.value)} />
+                <input style={input} type="number" step="0.1" value={kmPorLitroGasolina} onChange={(e) => setKmPorLitroGasolina(+e.target.value)} />
               </label>
             </>
           )}
@@ -353,30 +326,30 @@ export default function App() {
             <>
               <label style={label}>
                 <span>Preço etanol (R$/L)</span>
-                <input type="number" step="0.01" value={precoEtanol} onChange={(e) => setPrecoEtanol(+e.target.value)} />
+                <input style={input} type="number" step="0.01" value={precoEtanol} onChange={(e) => setPrecoEtanol(+e.target.value)} />
               </label>
               <label style={label}>
                 <span>Consumo (km/L)</span>
-                <input type="number" step="0.1" value={kmPorLitroEtanol} onChange={(e) => setKmPorLitroEtanol(+e.target.value)} />
+                <input style={input} type="number" step="0.1" value={kmPorLitroEtanol} onChange={(e) => setKmPorLitroEtanol(+e.target.value)} />
               </label>
             </>
           )}
 
-          <hr />
+          <hr style={{ borderColor: "#222" }} />
 
           <label style={label}>
             <span>Meus ganhos (R$)</span>
-            <input type="number" value={ganhos} onChange={(e) => setGanhos(+e.target.value)} />
+            <input style={input} type="number" value={ganhos} onChange={(e) => setGanhos(+e.target.value)} />
           </label>
 
           <label style={label}>
             <span>Aluguel por dia (R$)</span>
-            <input type="number" value={aluguelDia} onChange={(e) => setAluguelDia(+e.target.value)} />
+            <input style={input} type="number" value={aluguelDia} onChange={(e) => setAluguelDia(+e.target.value)} />
           </label>
 
           <label style={label}>
             <span>Outros custos do dia (R$)</span>
-            <input type="number" value={outros} onChange={(e) => setOutros(+e.target.value)} />
+            <input style={input} type="number" value={outros} onChange={(e) => setOutros(+e.target.value)} />
           </label>
 
           <div style={{ fontSize: 12, opacity: 0.75, marginTop: 10 }}>
@@ -391,41 +364,68 @@ export default function App() {
 function Box({ title, value, sub }) {
   return (
     <div style={box}>
-      <div style={{ fontSize: 13, opacity: 0.8 }}>{title}</div>
+      <div style={{ fontSize: 13, opacity: 0.85 }}>{title}</div>
       <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{value}</div>
-      <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>{sub}</div>
+      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>{sub}</div>
     </div>
   );
 }
 
+// ===== TEMA FIXO (resolve o “quadrado branco” no celular) =====
+const page = {
+  padding: 16,
+  fontFamily: "Arial",
+  maxWidth: 980,
+  margin: "0 auto",
+  minHeight: "100vh",
+  background: "#000",
+  color: "#f5f5f5",
+};
+
 const panel = {
-  border: "1px solid #eaeaea",
+  border: "1px solid #2a2a2a",
   borderRadius: 14,
   padding: 14,
-  boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
+  background: "#0b0b0b",
+  color: "#f5f5f5",
+  boxShadow: "0 2px 12px rgba(0,0,0,0.35)",
 };
 
 const box = {
-  border: "1px solid #f0f0f0",
+  border: "1px solid #2a2a2a",
   borderRadius: 12,
   padding: 12,
-  background: "white",
+  background: "#141414",
+  color: "#f5f5f5",
   minHeight: 92,
 };
 
 const card = {
-  border: "1px solid #eaeaea",
+  border: "1px solid #2a2a2a",
   borderRadius: 14,
   padding: 14,
-  boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
+  background: "#0b0b0b",
+  color: "#f5f5f5",
+  boxShadow: "0 2px 12px rgba(0,0,0,0.35)",
 };
 
 const label = { display: "grid", gap: 6, marginBottom: 10 };
 
+const input = {
+  padding: "10px 10px",
+  borderRadius: 10,
+  border: "1px solid #333",
+  background: "#0f0f0f",
+  color: "#f5f5f5",
+  outline: "none",
+};
+
 const btnPrimary = {
   padding: "10px 12px",
   borderRadius: 12,
-  border: "1px solid #ddd",
+  border: "1px solid #444",
+  background: "#111",
+  color: "#fff",
   fontWeight: 800,
   cursor: "pointer",
 };
@@ -433,14 +433,18 @@ const btnPrimary = {
 const btn = {
   padding: "10px 12px",
   borderRadius: 12,
-  border: "1px solid #ddd",
+  border: "1px solid #444",
+  background: "#0f0f0f",
+  color: "#fff",
   cursor: "pointer",
 };
 
 const btnDanger = {
   padding: "10px 12px",
   borderRadius: 12,
-  border: "1px solid #f0c2c2",
+  border: "1px solid #7a2b2b",
+  background: "#1a0b0b",
+  color: "#fff",
   cursor: "pointer",
   fontWeight: 800,
 };
